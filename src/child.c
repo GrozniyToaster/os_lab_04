@@ -5,9 +5,11 @@
 #include <stdlib.h>
 
 #include <sys/mman.h>
-#include <sys/stat.h>        
+#include <sys/stat.h> 
+#include <semaphore.h>       
 #include <fcntl.h>           
 #include <limits.h>
+#include <errno.h>
 
 #include "settings.h"
 
@@ -22,7 +24,7 @@
 
 
 
-int ChildWork(){
+/*int ChildWork(){
     float floats[3];
     char command[BUF_SIZE];
     while( ReadString( STDIN_FILENO, command ) > 0 ){
@@ -42,23 +44,42 @@ int ChildWork(){
     }
     return SUCCESS;
 }
-
+*/
 
 int main(){
 
+    sem_t* CreationFSM;
+    if ( ( CreationFSM = sem_open(SendFileNameSem, 0)) == SEM_FAILED ) {
+            perror("Child: sem_open");
+            exit (errno);
+    }
+    sem_t* ReceiveFSM;
+    if ( ( ReceiveFSM = sem_open(ReadFileNameSem, 0)) == SEM_FAILED ) {
+            perror("Child: sem_open");
+            exit (errno);
+    }
+    printf( "Child alive\n" );
+
+    if ( sem_wait( CreationFSM ) == -1 ){
+        perror("Child: sem_wait");
+        exit( errno );
+    }
     int transportName = shm_open( SHM_File_Name, O_RDONLY , S_IWUSR | S_IRUSR );
     if ( transportName == -1  ){
-        perror("Cant create File_for_transport_Name\n");
-        exit( FAIL );
+        perror("Child: Cant open File_for_transport_Name\n");
+        exit( errno );
     }
     
     char* addr = mmap(NULL, NAME_MAX, PROT_READ, MAP_SHARED, transportName, 0);
     if (addr == MAP_FAILED){
         perror("Mmap Parent error");
-        exit(FAIL);
+        exit( errno );
     }
+    
+    sem_post( ReceiveFSM );
+
     char fileName[ NAME_MAX ];
     strcpy( fileName, addr );
     
-    printf( "%s", fileName );
+    printf( "Child: %s", fileName );
 }
