@@ -1,6 +1,6 @@
 CC = gcc
 CCFLAGS =  -O2  -Wall   -pedantic
-LIBS =  -lrt -pthread
+LIBS =  -lrt -pthread -lm
 
 NAME_PARENT = os_lab4_parent
 NAME_CHILD = os_lab4_child

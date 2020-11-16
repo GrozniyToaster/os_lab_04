@@ -1,85 +1,119 @@
-#include <unistd.h>
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include <sys/mman.h>
-#include <sys/stat.h> 
-#include <semaphore.h>       
-#include <fcntl.h>           
-#include <limits.h>
-#include <errno.h>
 
 #include "settings.h"
 
-#define SUCCESS 0
-#define FAIL -1
-#define BUF_SIZE 256
-#define MAX_STRING  256
-#define NUMERAL_SYSTEM 10
+    void* addr;
+    sem_t* Send;
+    sem_t* Receive;
 
+void writeInFile( long len, float* mas ){
+    
+    float count = len ;
+    float* ad = (float*) addr + 1;
+    if ( len < 0 ){
+        memcpy( (float*) addr, &( count ), sizeof( float ) );
+        sem_post( Receive );
+        return;
+    }
+    if ( sem_wait( Send ) == -1 ){
+        perror( "Wait Receive in Child Write\n" );
+        exit( errno );
+    }
+    memcpy( (float*) addr, &( count ), sizeof( float ) );
+    if ( len != 0 ){
+        memcpy( ad, (void*) mas, sizeof( float ) * len );
+    }
+    sem_post( Receive );
+}
 
-
-
-
-
-/*int ChildWork(){
-    float floats[3];
-    char command[BUF_SIZE];
-    while( ReadString( STDIN_FILENO, command ) > 0 ){
-        if ( StrToFloatTok( command, floats, 3 ) < 3 ){
-            perror("Nonvalid command");
-            perror(command);
+int ChildWork(){
+    float floats[ POSSIBLE_FLOATS ];
+    char* string = NULL;
+    size_t len;
+    
+    while( getline( &string, &len, stdin ) > 0 ){
+        char* currTok = strtok( string, " ");
+        if ( *currTok == '\n'  ){
+            continue;
+        } 
+        if ( currTok == NULL ){// exep
+            printf("Child eof\n");
+            writeInFile( 0, NULL );
+            break;
+        }
+        float piv = strtof( currTok, NULL );
+        int TokCounter = 0;
+        while( currTok != NULL ){
+            currTok = strtok( NULL, " ");
+            if ( currTok == NULL ){
+                break;
+            }
+            floats[ TokCounter ] = strtof( currTok, NULL );
+            TokCounter++;
+        }
+        if ( TokCounter == 0 ){ // exep
+            writeInFile( -1, NULL );
+            free( string );
             return FAIL;
         }
-        for( int i = 1; i < 3; ++i ){
-            float res = floats[0] / floats[i];
-            if ( isinff( res ) ){
-                perror("Division by zero");
-                return FAIL;
+        for ( int i = 0; i < TokCounter; i++ ){
+            if ( floats[i] == 0 ){
+                floats[i] = INFINITY;
+                writeInFile( i + 1, floats );
+                free( string );
+                return( FAIL );
             }
-            write( STDOUT_FILENO, &res, sizeof( float )  );
+            floats[i] = piv / floats[i];
         }
+        writeInFile( TokCounter, floats );
+
     }
+    writeInFile( 0, NULL );
+    free( string );
     return SUCCESS;
 }
-*/
 
 int main(){
 
-    sem_t* CreationFSM;
-    if ( ( CreationFSM = sem_open(SendFileNameSem, 0)) == SEM_FAILED ) {
-            perror("Child: sem_open");
-            exit (errno);
-    }
-    sem_t* ReceiveFSM;
-    if ( ( ReceiveFSM = sem_open(ReadFileNameSem, 0)) == SEM_FAILED ) {
-            perror("Child: sem_open");
-            exit (errno);
-    }
-    printf( "Child alive\n" );
 
-    if ( sem_wait( CreationFSM ) == -1 ){
-        perror("Child: sem_wait");
+    if ( ( Send = sem_open(SendFileNameSem, 0)) == SEM_FAILED ) { // семафоры
+        perror("Child: sem_open\n");
+        exit (errno);
+    }
+    if ( ( Receive = sem_open(ReadFileNameSem, 0)) == SEM_FAILED ) {
+        perror("Child: sem_open\n");
+        exit (errno);
+    }
+
+    if ( sem_wait( Send ) == -1 ){ // ждем создания файла ждя имени
+        perror("Child: sem_wait\n");
         exit( errno );
     }
-    int transportName = shm_open( SHM_File_Name, O_RDONLY , S_IWUSR | S_IRUSR );
+    int transportName = shm_open( SHM_File_Name, O_RDWR, S_IWUSR | S_IRUSR ); // коннектимся 
     if ( transportName == -1  ){
         perror("Child: Cant open File_for_transport_Name\n");
         exit( errno );
     }
     
-    char* addr = mmap(NULL, NAME_MAX, PROT_READ, MAP_SHARED, transportName, 0);
+    addr = mmap(NULL, BUF_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, transportName, 0);
     if (addr == MAP_FAILED){
-        perror("Mmap Parent error");
+        perror("Mmap Parent error\n");
         exit( errno );
     }
-    
-    sem_post( ReceiveFSM );
 
     char fileName[ NAME_MAX ];
-    strcpy( fileName, addr );
-    
-    printf( "Child: %s", fileName );
+    strcpy( fileName, (char*) addr );
+    sem_post( Receive );
+    int input = open( fileName, O_RDONLY );
+    if ( input == -1 ){
+        perror("Child: Cant open input file\n");
+        writeInFile( -2, NULL );
+        exit( errno );
+    }
+
+    dup2( input, STDIN_FILENO );
+
+    if ( ChildWork() < 0 ){
+        exit( FAIL );
+    }
+    exit( SUCCESS );
 }

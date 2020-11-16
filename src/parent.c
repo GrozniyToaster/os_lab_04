@@ -1,49 +1,58 @@
-#include <unistd.h>
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include <sys/mman.h>
-#include <semaphore.h>
-#include <sys/stat.h>        
-#include <fcntl.h>           
 
 #include "settings.h"
-#include <errno.h>
-#include <limits.h>
 
-#define SUCCESS 0
-#define FAIL -1
-#define BUF_SIZE 256
-#define MAX_STRING  256
-#define NUMERAL_SYSTEM 10
+    sem_t *Send;
+    sem_t *Received;
+    void* addr;
 
-
-
-
-
-
-
-/*
-void ParentWork( int childFD ){
-    float toPrint;
-    char pr[BUF_SIZE];
-    while( read( childFD, &toPrint, sizeof( float ) ) > 0 ){
-        sprintf( pr,"Received from child %4.4f \n", toPrint );
-        write( STDOUT_FILENO, pr , strlen( pr ) * sizeof( char ) );
+void ParentWork(){
+    int signals = 0;
+    float len;
+    float floats[ POSSIBLE_FLOATS ];
+    while ( signals == 0 ){
+        if  (sem_wait( Received ) == -1){
+            perror("Parent: sem_wait");
+            exit( errno );
+        }
+        memcpy( &len, addr, sizeof( float ) );
+        if ( len <= 0){
+            signals = len;
+            break;
+        }
+        float* data = (float*)addr + 1;
+        int strlen = len;
+        memcpy( floats, data, sizeof( float ) * strlen );
+        for ( int i = 0; i< strlen ; i++){
+            if ( floats[i] == INFINITY ){
+                printf("Deviation by zero\n");
+                return;
+            }
+            printf("%f ", floats[i]);
+        }
+        printf("\n");
+        sem_post( Send );
+    }
+    if ( signals == 0 ){
+        sem_post( Send );
+        return;
+    }else if ( signals == -1 ){
+        sem_post( Send );
+        perror("Wrong format ( one float in string )\n");
+        return;
+    }else if ( signals == -2 ){
+        sem_post( Send );
+        printf( "File does not exist\n" );
+        return;
     }
 }
-*/
+
 int main(){
 
-    sem_t *FileNameReadyToConnect;
-    if ( (FileNameReadyToConnect = sem_open(SendFileNameSem, O_CREAT, S_IWUSR | S_IRUSR, 0) ) == SEM_FAILED ) {
+    if ( (Send = sem_open(SendFileNameSem, O_CREAT, S_IWUSR | S_IRUSR, 0) ) == SEM_FAILED ) {
         perror("Before fork sem does not create\n");
         exit( errno );
     }
-    sem_t *FileNameConnected;
-    if ( (FileNameConnected = sem_open(ReadFileNameSem, O_CREAT, S_IWUSR | S_IRUSR, 0) ) == SEM_FAILED ) {
+    if ( (Received = sem_open(ReadFileNameSem, O_CREAT, S_IWUSR | S_IRUSR, 0) ) == SEM_FAILED ) {
         perror("Before fork sem does not create\n");
         exit( errno );
     }
@@ -69,24 +78,28 @@ int main(){
             exit( errno );
         }
         
-        
-        if ( ftruncate(transportName, NAME_MAX) == -1){
+        if ( ftruncate(transportName, BUF_SIZE) == -1){
             perror("Ftruncate error");
             exit ( errno );
         }
 
-        char* addr = mmap(NULL, NAME_MAX, PROT_WRITE, MAP_SHARED, transportName, 0);
+        addr = mmap(NULL, NAME_MAX, PROT_WRITE | PROT_READ , MAP_SHARED, transportName, 0);
         if (addr == MAP_FAILED){
             perror("Mmap Parent error");
             exit(errno);
         }
-        fflush(stdout);    // и сбрасываем буффер вывода
-        strcpy( addr, fileName );
-        sem_post( FileNameReadyToConnect );
-        if  (sem_wait( FileNameConnected ) == -1){
+
+        strcpy( (char*) addr, fileName );
+        sem_post( Send );
+
+        if  (sem_wait( Received ) == -1){
             perror("Parent: sem_wait");
             exit( errno );
         }
+        
+        sem_post( Send );
+
+        ParentWork();
         if (munmap( addr, NAME_MAX ) == -1 ){
             perror("Unmap file_name Parent error");
             exit(errno);
@@ -95,7 +108,11 @@ int main(){
             perror("Unlink file_name Parent error");
             exit(errno);
         }
-        exit( SUCCESS );
     }
+        sem_close( Send );
+        sem_unlink( SendFileNameSem );
+        sem_close( Received );
+        sem_unlink( ReadFileNameSem );
+        exit( SUCCESS );
     
 }
